@@ -1,0 +1,275 @@
+---
+title: "Final Project (Fast Food Restaurants & US Census Data)"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+---
+
+```{r setup, include = FALSE, eval = TRUE}
+### Loading Libraries
+library(flexdashboard)
+library(tidyverse)
+library(skimr)
+library(naniar)
+library(ggplot2)
+library(dplyr)
+library(maps)
+library(flextable)
+library(plotly)
+library(flexdashboard)
+library(stringr)
+library(kableExtra)
+library(highcharter)
+library(wordcloud2)
+library(RColorBrewer)
+library(usmap)
+library(leaflet)
+library(broom)
+library(moments)
+set.seed(1994)
+```
+
+
+
+```{r }
+### Loading the Datasets
+# Fast Food dataset
+fastFoodData <-  read_csv("fastFoodGeo.csv")
+
+#Census dataset
+censusData <- read_csv("census_data_full_2008-2021.csv")
+```
+
+```{r}
+# Merging Data Sets
+
+## Joining two datasets
+finalData <- inner_join(fastFoodData, censusData, by = "geoid")
+
+finalData <- finalData %>% select(geoid,keys,address,city,country,name,postalCode,province,lat,long,year,population,median_income,median_monthly_rent_cost,median_monthly_home_cost, prop_female,prop_male, prop_poverty)
+
+```
+
+
+Column {data-width=650 .tabset}
+-----------------------------------------------------------------------
+
+### Word Cloud: Fast Food Leading Brands in the US
+
+```{r}
+# Filter the data for fast food leading brands
+leading_brands <- subset(finalData, !is.na(name))$name
+
+# Generate the word frequencies
+word_freq <- table(leading_brands)
+
+# Convert the word frequencies to a data frame
+word_df <- data.frame(word = names(word_freq), freq = as.numeric(word_freq))
+
+# Sort the data frame by frequency in descending order
+word_df <- word_df[order(word_df$freq, decreasing = TRUE), ]
+
+# Limit the number of words to 100
+word_df <- head(word_df, 50)
+
+# Create the interactive word cloud
+wordcloud2(word_df, size = 1.5, color = "random-dark", backgroundColor = "white")
+```
+
+### Line Plot: Trend of Fast Food Restaurants Over the Years
+
+```{r }
+# Calculate the total number of fast food restaurants by year
+restaurant_trend <- finalData %>%
+  group_by(year) %>%
+  summarise(total_restaurants = n())
+
+# Create an interactive line plot to show the trend of fast food restaurants over the years
+plot_restaurant_trend <- ggplot(restaurant_trend, aes(x = year, y = total_restaurants)) +
+  geom_line(color = "steelblue", size = 1.5) +
+  labs(title = "Trend of Fast Food Restaurants Over the Years",
+       x = "Year",
+       y = "Total Restaurants",
+       caption = "Data Source: FinalData") +
+  theme_bw()
+
+plot_restaurant_trend
+
+```
+
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Scatter Plot: Relationship between Poverty and Fast Food Restaurants
+
+```{r}
+# Calculate the proportion of people in poverty by province
+poverty_data <- finalData %>%
+  group_by(province) %>%
+  summarise(prop_poverty = mean(prop_poverty),
+            total_restaurants = n_distinct(name))
+
+# Create an interactive scatter plot
+scatter_plot <- ggplot(poverty_data, aes(x = prop_poverty, y = total_restaurants)) +
+  geom_point(color = "steelblue") +
+  labs(title = "Relationship between Poverty and Fast Food Restaurants",
+       x = "Proportion of People in Poverty",
+       y = "Total Number of Fast Food Restaurants",
+       caption = "Data Source: FinalData") +
+  theme_bw()
+
+scatter_plot
+```
+
+### Monte Carlo Methods of Inference
+
+```{r }
+##  A Monte Carlo simulation using the One-Way ANOVA model
+
+## Null Hypothesis (H0): There is no difference in the average number of locations for the different restaurant names across the states in the United States.
+
+## Alternative Hypothesis (Ha):There is a difference in the average number of locations for the different restaurant names across the states in the United States.
+
+set.seed(1994)
+
+# Step 1: Create a new data frame with counts of restaurant locations in each state for each restaurant name
+restaurant_counts <- finalData %>%
+  group_by(name, province) %>%
+  summarise(num_locations = n()) %>%
+  ungroup()
+
+# Step 2: Subset to restaurants with a sufficiently large number of locations in every state
+min_locations_per_state <- 5  # Set the minimum number of locations per state
+restaurant_counts_subset <- restaurant_counts %>%
+  group_by(name) %>%
+  filter(all(num_locations >= min_locations_per_state)) %>%
+  ungroup()
+
+# Step 3: Perform One-Way ANOVA
+anova_result <- aov(num_locations ~ name, data = restaurant_counts_subset)
+
+# Step 4: Extract the F-statistic from the ANOVA result
+f_statistic <- summary(anova_result)[[1]]$`F value`
+
+# Step 5: Create a null distribution of F-statistics using Monte Carlo simulation
+num_permutations <- 1000  # Increase the number of permutations
+null_distribution <- numeric(num_permutations)
+
+for (i in 1:num_permutations) {
+  # Step 5a: Shuffle the num_locations randomly between different restaurant names
+  shuffled_counts <- restaurant_counts %>%
+    mutate(name_shuffled = sample(name)) %>%
+    group_by(name_shuffled, province) %>%
+    summarise(num_locations_shuffled = sum(num_locations)) %>%
+    ungroup()
+  
+  # Step 5b: Perform One-Way ANOVA for the shuffled data and extract the F-statistic
+  null_anova_result <- aov(num_locations_shuffled ~ name_shuffled, data = shuffled_counts)
+  
+  # Step 5c: Extract the F-statistic from the shuffled ANOVA result
+  null_f_statistic <- summary(null_anova_result)[[1]]$`F value`
+  
+  # Step 5d: Check if the F-statistic is present in the summary (in case it's not available for some permutations)
+  if (!is.null(null_f_statistic)) {
+    null_distribution[i] <- null_f_statistic
+  }
+}
+
+# Step 6: Remove any NA values from the null distribution
+null_distribution <- null_distribution[!is.na(null_distribution)]
+
+# Calculate the 5th percentile of the null distribution
+null_5th_percentile <- quantile(null_distribution, 0.05)
+
+# Step 7: Plot the null distribution of F-statistics
+comparison_plot_f <- ggplot(data.frame(F_statistic = null_distribution), aes(x = F_statistic)) +
+  geom_histogram(binwidth = 0.2, fill = alpha("lightblue", 0.7), color = "black") +
+  geom_vline(xintercept = null_5th_percentile, color = "red", linetype = "dashed") +
+  geom_vline(xintercept = f_statistic, color = "blue", linetype = "solid") +
+  labs(x = "F-statistic",
+       y = "Frequency",
+       title = "Null Distribution of the F-statistic in One-Way ANOVA") +
+  theme_bw()
+
+comparison_plot_f
+
+```
+
+
+### Bootstrap Methods of Inference
+
+```{r }
+# Problem Statement:
+# The objective of this analysis is to estimate the median income for a specific dataset ("finalData") using the bootstrap method of inference. We want to determine the uncertainty associated with the median income estimate and construct a 95% confidence interval for the true median income. Additionally, we aim to visualize the distribution of bootstrap medians and compare it to the observed median income to assess the representatives of the observed estimate.
+
+
+#Removing missing values from median_income
+median_income_cleaned <- na.omit(finalData$median_income)
+
+#Calculating the median of a bootstrap sample
+bootstrap_median <- function(x) {median(sample(x, replace = TRUE))}
+
+#setting seed
+set.seed(123456)
+#Generating bootstrap samples while calculating the median of them
+bootstrap_median <- replicate(10000, bootstrap_median(median_income_cleaned))
+
+#Calculating the standard error
+SE <- sd(bootstrap_median)
+
+#Calculating the 95% confidence intervals
+conf_interval <- 0.95
+lower_bound <- quantile(bootstrap_median, probs = (1 - conf_interval )/ 2)
+upper_bound <- quantile(bootstrap_median, probs = 1 - (1 - conf_interval)/ 2)
+
+#Generating Histogram of the distribution
+data_frame <- data.frame(bootstrap_median)
+hist_plot <- ggplot(data_frame, aes(x = bootstrap_median)) +
+  geom_histogram(color = "black", fill = "dodgerblue") +
+  geom_vline(xintercept = lower_bound, linetype = "dashed", color = "red", size = 1.5) +
+  geom_vline(xintercept = upper_bound, linetype = "dashed", color = "red", size = 1.5) +
+  geom_vline(xintercept = median(median_income_cleaned), color = "black", linetype = "dashed", size = 1) +
+  scale_x_continuous(labels = scales::comma) +
+  labs(x = "Median income",
+       y = "Frequency",
+       title = "Median Income Bootstrap Sample",
+       subtitle = "Observed median income--dashed line")
+
+hist_plot
+
+```
+
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Summary statistics of prop_poverty by province
+
+```{r }
+#The code calculates summary statistics (mean, median, standard deviation, minimum, maximum) of the proportion of people living in poverty (prop_poverty) grouped by province. The resulting table, summary_stats_poverty, provides insights into the poverty levels across different provinces.
+
+# Calculate the summary statistics of prop_poverty by province
+summary_stats_poverty <- finalData %>%
+  group_by(province) %>%
+  summarise(mean_prop_poverty = round(mean(prop_poverty), 2),
+            median_prop_poverty = round(median(prop_poverty), 2),
+            sd_prop_poverty = round(sd(prop_poverty), 2),
+            min_prop_poverty = round(min(prop_poverty), 2),
+            max_prop_poverty = round(max(prop_poverty), 2))
+
+# Rename the columns in the summary statistics table
+new_column_names_poverty_province <- c("Province", "Mean Proportion Poverty", "Median Proportion Poverty", "St. Deviation Poverty", "Minimum Proportion Poverty", "Maximum Proportion Poverty")
+
+# Set the new column names
+colnames(summary_stats_poverty) <- new_column_names_poverty_province
+
+# Set the caption
+caption_text_poverty <- "Table 5: Summary Statistics of Proportion of People Living in Poverty by Province"
+
+# Print the table with caption using knitr::kable()
+kable(head(summary_stats_poverty, 5), caption = caption_text_poverty, align = "l") %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
